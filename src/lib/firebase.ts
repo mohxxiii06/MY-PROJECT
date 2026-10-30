@@ -81,8 +81,31 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+export const ADMIN_EMAILS = ['behlimmohsin06@gmail.com', 'dpmaster529@gmail.com'];
+export const ADMIN_EMAIL = 'behlimmohsin06@gmail.com';
+export const ADMIN_DEFAULT_PASS = 'mohsin06';
+
+export function getLocalUserSession(): { uid: string; email: string | null; displayName: string | null; phone?: string | null; isAdmin?: boolean } | null {
+  try {
+    const saved = localStorage.getItem('wecare_current_user');
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return null;
+}
+
+export function setLocalUserSession(user: { uid: string; email: string | null; displayName: string | null; phone?: string | null; isAdmin?: boolean } | null): void {
+  try {
+    if (user) {
+      localStorage.setItem('wecare_current_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('wecare_current_user');
+      localStorage.removeItem('wecare_admin_session');
+    }
+  } catch {}
+}
+
 // User Profile Helpers
-export async function createUserProfile(user: User, additionalData?: { displayName?: string; phone?: string }) {
+export async function createUserProfile(user: { uid: string; email?: string | null; displayName?: string | null }, additionalData?: { displayName?: string; phone?: string }) {
   if (!user) return;
   const userRef = doc(db, 'users', user.uid);
   try {

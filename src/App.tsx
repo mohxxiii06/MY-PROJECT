@@ -39,7 +39,7 @@ import {
 import { NotificationModal } from './components/NotificationModal';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { DEPARTMENTS, DOCTORS, DEFAULT_MEDICAL_RECORDS } from './data';
-import { Department, Doctor, Appointment, UserProfile, MedicalRecord } from './types';
+import { Department, Doctor, Appointment, UserProfile, MedicalRecord, AppUser } from './types';
 import { 
   auth, 
   createAppointmentInFirestore, 
@@ -47,7 +47,10 @@ import {
   deleteAppointmentFromFirestore, 
   getUserProfile,
   getUserMedicalRecordsFromFirestore,
-  saveMedicalRecordToFirestore
+  saveMedicalRecordToFirestore,
+  ADMIN_EMAILS,
+  getLocalUserSession,
+  setLocalUserSession
 } from './lib/firebase';
 import AuthModal from './components/AuthModal';
 import AdminPortal from './components/AdminPortal';
@@ -58,7 +61,7 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   // Auth state
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<AppUser | User | null>(() => getLocalUserSession());
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -101,8 +104,16 @@ export default function App() {
   // Monitor Firebase Auth state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
       if (user) {
+        const appUserObj: AppUser = {
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName || 'Patient',
+          phone: user.phoneNumber,
+          isAdmin: ADMIN_EMAILS.includes(user.email?.toLowerCase() || '')
+        };
+        setCurrentUser(appUserObj);
+        setLocalUserSession(appUserObj);
         setPatientName(user.displayName || '');
         setPatientEmail(user.email || '');
         const profile = await getUserProfile(user.uid);
@@ -122,47 +133,59 @@ export default function App() {
         if (userRecords && userRecords.length > 0) {
           setMedicalRecords(userRecords);
         } else {
-          // If fresh user without recorded history, initialize with comprehensive hospital sample records
           setMedicalRecords(DEFAULT_MEDICAL_RECORDS);
         }
         setLoadingRecords(false);
       } else {
-        setUserProfile(null);
-        // Load local storage fallback appointments
-        try {
-          const saved = localStorage.getItem('wecare_appointments');
-          if (saved) {
-            setAppointments(JSON.parse(saved));
-          } else {
-            setAppointments([
-              {
-                id: 'WC-98214',
-                patientName: 'Guest Patient',
-                patientPhone: '+1 (555) 019-2834',
-                patientEmail: 'guest@example.com',
-                departmentName: 'Cardiology',
-                doctorName: 'Dr. Saniya',
-                date: '2026-10-24',
-                timeSlot: '09:30 AM',
-                notes: 'Annual cardiovascular checkup.',
-                status: 'Confirmed',
-                createdAt: new Date().toISOString()
-              }
-            ]);
-          }
-        } catch {
-          // ignore
-        }
-
-        // Load guest medical records from local storage or default
-        try {
-          const savedRecords = localStorage.getItem('wecare_medical_records_guest');
-          if (savedRecords) {
-            setMedicalRecords(JSON.parse(savedRecords));
+        const local = getLocalUserSession();
+        if (local) {
+          setCurrentUser(local);
+          setPatientName(local.displayName || '');
+          setPatientEmail(local.email || '');
+          setLoadingAppointments(true);
+          const userAppts = await getUserAppointmentsFromFirestore(local.uid);
+          setAppointments(userAppts);
+          setLoadingAppointments(false);
+          const userRecords = await getUserMedicalRecordsFromFirestore(local.uid);
+          if (userRecords && userRecords.length > 0) {
+            setMedicalRecords(userRecords);
           } else {
             setMedicalRecords(DEFAULT_MEDICAL_RECORDS);
           }
-        } catch {}
+        } else {
+          setUserProfile(null);
+          try {
+            const saved = localStorage.getItem('wecare_appointments');
+            if (saved) {
+              setAppointments(JSON.parse(saved));
+            } else {
+              setAppointments([
+                {
+                  id: 'WC-98214',
+                  patientName: 'Guest Patient',
+                  patientPhone: '+1 (555) 019-2834',
+                  patientEmail: 'guest@example.com',
+                  departmentName: 'Cardiology',
+                  doctorName: 'Dr. Saniya',
+                  date: '2026-10-24',
+                  timeSlot: '09:30 AM',
+                  notes: 'Annual cardiovascular checkup.',
+                  status: 'Confirmed',
+                  createdAt: new Date().toISOString()
+                }
+              ]);
+            }
+          } catch {}
+
+          try {
+            const savedRecords = localStorage.getItem('wecare_medical_records_guest');
+            if (savedRecords) {
+              setMedicalRecords(JSON.parse(savedRecords));
+            } else {
+              setMedicalRecords(DEFAULT_MEDICAL_RECORDS);
+            }
+          } catch {}
+        }
       }
       setAuthLoading(false);
     });
@@ -218,12 +241,15 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    setLocalUserSession(null);
+    setCurrentUser(null);
+    setUserProfile(null);
     try {
       await signOut(auth);
-      setActiveTab('home');
     } catch (err) {
-      console.error('Sign out error:', err);
+      console.warn('Sign out notice:', err);
     }
+    setActiveTab('home');
   };
 
   const handleConfirmAppointment = async (e: React.FormEvent) => {
@@ -1127,7 +1153,12 @@ export default function App() {
 
         {/* Admin Portal Tab */}
         {activeTab === 'admin' && (
-          <AdminPortal currentUser={currentUser} onClose={() => setActiveTab('home')} />
+          <AdminPortal 
+            currentUser={currentUser} 
+            onLoginSuccess={(user) => setCurrentUser(user)}
+            onSignOut={handleSignOut}
+            onClose={() => setActiveTab('home')} 
+          />
         )}
       </main>
 
@@ -1413,6 +1444,11 @@ export default function App() {
       <AuthModal 
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          setPatientName(user.displayName || '');
+          setPatientEmail(user.email || '');
+        }}
         initialMode={authModalInitialMode}
       />
 

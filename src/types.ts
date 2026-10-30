@@ -40,6 +40,15 @@ export interface UserProfile {
   };
 }
 
+export interface AppUser {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  phone?: string | null;
+  photoURL?: string | null;
+  isAdmin?: boolean;
+}
+
 export interface MedicalRecord {
   id: string;
   patientId: string;
